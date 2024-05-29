@@ -6,6 +6,9 @@
 # Env file
 .env
 
+# Ignore PDF Files
+*.pdf
+
 # User-specific files
 *.rsuser
 *.suo
