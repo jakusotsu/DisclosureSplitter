@@ -14,7 +14,8 @@ from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 from dotenv import load_dotenv
 import spacy
-
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import DeadlineExceeded
 load_dotenv()
 my_api_key = os.getenv('MY_API_KEY')
 
@@ -30,7 +31,9 @@ def split_pdf_pages(pdf_path, pageNumbers, docTitle):
         output_path = os.path.join(getOutputFolder(pdf_path), f"{sanitized_docTitle}.pdf")
         reader = PdfReader(file)
         writer = PdfWriter()
-        for page_number in range(pageNumbers[0], pageNumbers[-1]+1):
+
+        
+        for page_number in range(int(pageNumbers[0]), int(pageNumbers[-1])+1):
             writer.add_page(reader.get_page(page_number))
         with open(output_path, 'wb') as output_file:
             writer.write(output_file)
@@ -98,6 +101,7 @@ async def choose_pdf(): # Get list of PDF files in current directory
         print(f"Conversion completed. Text saved to: {txtFilePath}")
         response = await uploadPrompt(txtFilePath)
         mappings = parseJson(response)
+        print (mappings)
         split_pdf(pdf_filename, mappings)
         print(f"\n\nExtraction complete, page numbers are: \n")
         summaryStr = ""
@@ -107,7 +111,11 @@ async def choose_pdf(): # Get list of PDF files in current directory
     else:
         print("No PDF chosen. Exiting.")
 
-
+@retry(
+    retry=retry_if_exception_type(DeadlineExceeded),
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=4, max=60)
+)
 async def uploadPrompt(txtFilePath):
     genai.configure(api_key=my_api_key)
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
@@ -123,8 +131,12 @@ async def uploadPrompt(txtFilePath):
         "combined when it seems they belong to the same document. Ignore lines. Return the page bounds zero indexed. If there "
         "is a gap in recognized documents, combine into the same page bounds. If there are separate documents, "
         "keep them separated. Make sure every page is accounted for. If there are unidentified documents, "
-        "consider them part of the most recently encountered document. Express output as a JSON mapping from "
-        "title of the document to an array containing the page ranges expressed as first page, last page."
+        "consider them part of the most recently encountered document. "
+        "Express output as a JSON mapping from "
+        "title of the document : single array containing the page ranges expressed as [first page, last page]."
+        "If the document is named California Residential Disclosure Report, apply these special rules: split into individual documents, while"
+        "if a page has a subtitle of 'Tax Summary', consider it and the pages through the page subtitled 'Property Tax Estimator' inclusive as the same document page range and title it 'Tax Summary'"
+        "In particular, find the documents LOCAL/SUPPLEMENTAL NATURAL HAZARD DISCLOSURES, Commercial / Industrial Zoning, Right to Farm, Environmental Information"
     )
     
     # Create a task for generate_content
